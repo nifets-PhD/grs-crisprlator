@@ -1,0 +1,19 @@
+[deps]
+Bijectors = "76274a88-744f-5084-9051-94815aaf08c4"
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+CytoscapeJS = "5d7a634b-b62e-4929-ba77-69c999086e42"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
+GeneRegulatorySystems = "321a2579-640d-4198-9790-c715c19becf3"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+JumpProcesses = "ccbc3e58-028d-4f4c-8cd5-9ae44345cda5"
+NeuralEstimators = "38f6df31-6b4a-4144-b2af-7ace2da57606"
+OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
+PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"
+
+[sources]
+GeneRegulatorySystems = {rev = "dev", url = "https://github.com/nifets/GeneRegulatorySystems.jl"}
+JumpProcesses = {rev = "dev", url = "https://github.com/nifets/JumpProcesses.jl"}
