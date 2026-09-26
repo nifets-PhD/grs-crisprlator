@@ -39,9 +39,12 @@ begin
 	import Bijectors
 	using LinearAlgebra
 	
-	using WGLMakie; WGLMakie.activate!()
+	using CairoMakie, WGLMakie
+	CairoMakie.activate!()
 	using PlutoUI
 	import CytoscapeJS
+	CytoscapeJS.Bonito.Page()
+
 	
 	TableOfContents()
 end
@@ -238,7 +241,7 @@ begin
 end
 
 # ╔═╡ 3394482e-6652-4736-81ea-5a5b6daa82f8
-md"""show replicates: $(@bind show_reps Switch(default=false))"""
+md"""show replicates: $(@bind show_reps Switch(default=true))"""
 
 
 # ╔═╡ f5977006-3f4e-4204-9565-b4217d41f38a
@@ -338,27 +341,6 @@ function plot_observation(condition, simulated, observed)
 	fig
 end
 
-# ╔═╡ 17866681-934a-4815-8d02-444bb98dcf52
-raw_observation(samples) = NamedTuple{conditions}(map(conditions) do c
-	times = traces[c].t
-	index = Dict(round(Int, t) => i for (i, t) in enumerate(times))
-	values = zeros(length(times), length(genes))
-	n = zeros(Int, length(times))
-	for s in samples
-		s.condition == string(c) || continue
-		i = get(index, round(Int, s.t), 0)
-		i == 0 && continue
-		n[i] += 1
-		values[i, :] .+= s.x
-	end
-	values ./ max.(n, 1)
-end)
-
-
-# ╔═╡ 0e65a84a-1d5f-4318-8eac-5f578319d1f6
-relamp(M) = [let c = @view M[:, j]; (maximum(c) - minimum(c)) / mean(c) end for j in 1:size(M, 2)]
-
-
 # ╔═╡ c2ba1b94-34d8-4e16-a799-4a4177bea7ab
 md"""
 ## 3. Prior
@@ -387,6 +369,11 @@ md"""
 We parametrise the network via sᵢⱼ ∈ \[-1,1\], normalised regulation strength from gene i to gene j, positive if activation and negative if repression. 
 """
 
+# ╔═╡ d8198379-3f20-48ae-8ccd-a03ab4bcd714
+edge_label(n) = let p = Base.split(String(n), ".edge.")
+	"$(p[1]) ← $(replace(p[2], ".sgrna_cas9" => ""))"
+end
+
 # ╔═╡ 8c1554a1-1638-47f1-adfb-23c383923d95
 @bind resample PlutoUI.Button("resample θ")
 
@@ -397,11 +384,6 @@ md"""
 
 # ╔═╡ 58274dc3-1edb-47af-b2fb-09585df8b474
 flatten(x) = Float32.(reduce(vcat, x))
-
-# ╔═╡ c175d899-3280-4067-99d5-b6e5b9311a7d
-md"""
-On my machine generating 15000 simulations takes about half an hour.
-"""
 
 # ╔═╡ f2a19c0f-c339-44bf-9773-98df6ccce7c1
 md"""
@@ -427,7 +409,7 @@ end
 
 # ╔═╡ d641081b-f7ce-475e-b0e4-c1422403b51f
 md"""
-We can now train the network. This takes around 10 minutes on my machine.
+We can now train the network:
 """
 
 # ╔═╡ 7d515807-3dc0-43af-9341-e971d6f270a9
@@ -461,7 +443,8 @@ function sbc_plot(result, simulations; alpha = 0.05)
 	fig = Figure(size = (680, 230 * cld(d, 3)))
 	for k in 1:d
 		ax = Axis(fig[fld1(k, 3), mod1(k, 3)];
-		          title = String(simulations.names[k]), xlabel = "rank", ylabel = "ECDF − uniform")
+		          title = edge_label(simulations.names[k]), xlabel = "rank", ylabel = "ECDF − uniform")
+
 		band!(ax, [0, 1], [-c, -c], [c, c]; color = (:grey, 0.25))
 		hlines!(ax, [0.0]; color = :red, linestyle = :dash)
 		lines!(ax, u, sort(result.ranks[k, :]) .- u; color = :steelblue)
@@ -469,20 +452,71 @@ function sbc_plot(result, simulations; alpha = 0.05)
 	fig
 end
 
-# ╔═╡ d7610be6-5d7c-427a-95b1-82d903ac4282
+# ╔═╡ 237184cb-50cd-40ed-ad78-9c8bbc969804
 md"""
-### 4.3. Sample the learned posterior conditioned on the experimental data
+Also check how much the posterior distribution shrinks compared to the prior:
 """
 
-# ╔═╡ 8954c65f-0cbe-4734-bf54-66113ccf8b39
+# ╔═╡ d7610be6-5d7c-427a-95b1-82d903ac4282
 md"""
-You can see that we start to see more oscillations in the unperturbed network.
+### 4.3. Condition the learned posterior on the experimental data
 """
+
+# ╔═╡ 9621d07a-7fb9-4e32-863e-b57a9e9b8a11
+md"""
+#### 4.3.1. Posterior predictive checks
+"""
+
+# ╔═╡ 4abd251a-1de6-4750-be13-6067cc7e2e92
+function plot_ppc_lines(condition, draws, observed; n = 12)
+	t = traces[condition].t
+	fig = Figure(size = (680, 440))
+	for (j, gene) in enumerate(genes)
+		colour = gene_colours[gene]
+		ax = Axis(fig[j,1]; ylabel = "relative fluorescence",
+				  xlabel = j == length(genes) ? "time (s)" : "",
+				  title = j == 1 ? String(condition) : "", yzoomlock = true)
+		for d in draws[1:min(n, end)]
+			lines!(ax, t, d[condition][:, j]; color = (colour, 0.3), linewidth = 1,
+				   label = "$gene sim")
+		end
+		lines!(ax, t, observed[:, j]; color = colour, linewidth = 2, linestyle = :dash,
+			   label = "$gene data")
+		axislegend(ax; position = :rt, merge = true)
+		j < length(genes) && hidexdecorations!(ax; grid = false)
+	end
+	rowgap!(fig.layout, 4)
+	fig
+end
+
 
 # ╔═╡ 409aa215-cc29-4469-bf6e-f6a59e8fb844
 md"""
-### 4.4. Can we recover the CRISPRLATOR network topology?
+### 4.4. Have we recovered the CRISPRLATOR network topology?
 """
+
+# ╔═╡ 08c0dbaf-a345-44a1-adc6-16e7f08fbb26
+md"""
+#### 4.4.1. Marginal densities
+"""
+
+# ╔═╡ 33a08a96-7161-430e-b89a-29fb6fa6087e
+md"""
+Blue: ring edges, Red: reverse ring edges. Sign of s tells us if the edge is activating or repressing, and magnitude of s gives the strength of the interaction.
+"""
+
+# ╔═╡ 03c97a0a-e488-4026-b4a5-c6fc6aa55bb4
+md"""
+This density plots for the ring edges shows that the n3 -| n1 edge is most constrained by the data (as the interventional data we have is exactly for this edge).
+"""
+
+# ╔═╡ a56d437c-7605-4e7e-b78c-19e17f8102f8
+md"""
+#### 4.4.2. Bayes Factor
+"""
+
+# ╔═╡ 734acf9f-030f-49bd-8c47-55580e4421e9
+bayes_factor(p, p0) = (p / (1 - p)) / (p0 / (1 - p0))
 
 # ╔═╡ 91fff83d-ff9d-4dbf-a3e8-04d14771ef1b
 md"""
@@ -490,13 +524,18 @@ md"""
 """
 
 # ╔═╡ 96560e70-0ddc-4e1c-ad6c-f63602e99993
-x_wt = Float32.(normalise(Matrix{Float64}(traces[:closed][:, collect(genes)])))
+x_wt = Float32.(normalise(Matrix{Float64}(traces[:closed][:, collect(genes)])));
 
 # ╔═╡ fd2da864-6c6b-4674-95f4-f56b4424d2d7
 md"""
 ### 4.6. Synthetic ring sanity check
 
 If we actually know the ground truth regulation, can we recover it from the observed dynamics?
+"""
+
+# ╔═╡ 1653db04-b38a-4f1a-857b-3b79f2e08584
+md"""
+We see here the same trend where the ring edges are well recovered but the reverse ring positive edges , showing that the data we have is not enough to fully constrain the topology. Of course, in this case we know from the construciton that all edges ought to be repressive, but in a more general setting we wouldn't.
 """
 
 # ╔═╡ a1b50041-e44c-4acb-96fb-e433ab21a560
@@ -666,7 +705,7 @@ prior_setup = let
         values
     end
 
-    (; names, prior, decode, edges, pairs)
+    (; names, prior, decode, edges, pairs, s_off, at_low, at_high)
 end
 
 
@@ -688,7 +727,7 @@ function standardise(θ, ref)
 end
 
 # ╔═╡ 3e493391-0720-4ecc-94c6-a93a03cfdb1f
-function train_posterior(θ, Z, split; seed="1", out=16, layers=4, width=64, lr=1e-3, batchsize=128, epochs=500, patience=30, sigma=0.08f0, path=joinpath("results", "estimator_$(seed).jld2"))
+function train_posterior(θ, Z, split; seed="1", out=16, layers=4, width=64, lr=1e-3, batchsize=128, epochs=500, patience=50, sigma=0.08f0, path=joinpath("results", "estimator_$(seed).jld2"))
 	mkpath(dirname(path))
 	estimator = PosteriorEstimator(embedding(; out), NormalisingFlow(size(θ, 1), out; num_coupling_layers=layers, width))
 	isfile(path) && return Flux.loadmodel!(estimator, load(path, "state"))
@@ -741,21 +780,14 @@ function posterior(estimator, obs, ref; N=20_000)
 	unstandardise(Float32.(P isa AbstractVector ? P[1] : P), ref)
 end
 
-# ╔═╡ 7aac6942-66bd-4213-b961-da788388ebce
-function plot_marginals(S; nbins = 40, s_off = 0.1, truth=nothing)
-	d = size(S, 1)
-	edges = range(-1, 1; length = nbins + 1)
-	fig = Figure(size = (680, 600))
-	for k in 1:d
-		ax = Axis(fig[fld1(k, 3), mod1(k, 3)];
-		          title = String(prior_setup.names[k]), xlabel = "s", ylabel = "density")
-		hist!(ax, S[k, :]; bins = edges, normalization = :pdf, color = (:steelblue, 0.75))
-		hlines!(ax, [0.5]; color = :black, linestyle = :dash)
-		vlines!(ax, [-s_off, s_off]; color = :grey, linestyle = :dot)
-		truth === nothing || vlines!(ax, [truth[k]]; color = :crimson, linewidth = 2.5)
-		xlims!(ax, -1.02, 1.02)
-	end
-	fig
+# ╔═╡ c0cb2a78-a875-4416-b7b6-3dd70eaaab45
+function shrinkage(estimator, θ, Z, split; nsims = 300, L = 400)
+	idx = split.val[1:min(nsims, length(split.val))]
+	ref = θ[:, split.train]
+	sds = reduce(hcat, map(idx) do j
+		vec(std(posterior(estimator, Z[:, :, j], ref; N = L); dims = 2))
+	end)
+	vec(mean(sds; dims = 2)) ./ vec(std(ref; dims = 2))
 end
 
 # ╔═╡ e91572ab-6858-4202-854e-10db4fa0e046
@@ -895,7 +927,7 @@ function generate(n; seed="1", path=joinpath("results", "simulations_$(n)_$(seed
 end
 
 # ╔═╡ 6e977053-1104-48eb-ac30-ae59237782c0
-sim_path = generate(15000; seed="apple")
+sim_path = generate(50000; seed="apple50k")
 
 # ╔═╡ 66af873c-7d69-45e0-9f62-bb4b5669804c
 simulations = let d = load(sim_path)
@@ -912,7 +944,7 @@ end
 
 # ╔═╡ 0ceab4f6-7249-4dc9-a1aa-604406ceb37d
 estimator = with_live_logs() do 
-	train_posterior(simulations.θ, simulations.Z, split; seed="apples") 
+	train_posterior(simulations.θ, simulations.Z, split; seed="apple50k") 
 end
 
 # ╔═╡ 2d431f5f-88c4-4c91-9860-9948d7242c8c
@@ -921,61 +953,143 @@ sbc_result = sbc(estimator, simulations.θ, simulations.Z, split)
 # ╔═╡ 0b517b7d-06a2-41d4-9eb0-29189ef21fdf
 sbc_plot(sbc_result, simulations)
 
+# ╔═╡ a3147353-d84e-4925-9be1-93ad53708754
+shrinkage(estimator, simulations.θ, simulations.Z, split)
+
 # ╔═╡ 49fd6fa6-c11d-447a-ae70-d5ba45e45811
 S = posterior(estimator, flatten(x), simulations.θ[:, split.train])
-
-# ╔═╡ fc8143b8-2576-4c3d-b444-2c7c8d9b73f7
-plot_marginals(S)
 
 # ╔═╡ a5d0d3f2-209d-427d-93cd-c8d312ceeb72
 sample_posterior(S)
 
-# ╔═╡ a64ae383-6d1f-4147-a6e3-0e7dff47d33b
-ring = let
-	idx = [findfirst(==(n), simulations.names) for n in
-	       (Symbol("n1.edge.n3.sgrna_cas9"),
-	        Symbol("n2.edge.n1.sgrna_cas9"),
-	        Symbol("n3.edge.n2.sgrna_cas9"))]
-	p = mean(vec(all(S[idx, :] .< 0; dims = 1)))
-	k = vec(sum(S[idx, :] .< 0; dims = 1))
-	(; idx,
-	   p_ring = p,
-	   bf_ring = (p / (1 - p)) / (0.125 / 0.875),
-	   p_edge = [mean(S[i, :] .< 0) for i in idx],
-	   kdist = [(j, mean(k .== j), mean(k .== j) / (binomial(3, j) * 0.125)) for j in 0:3])
+# ╔═╡ c9cc99b1-b43b-4f2d-bd89-ffd4e39bf30d
+ppc_draws = let n = 30
+	map(1:n) do i
+		θ = S[:, rand(1:size(S, 2))]
+		observation(run(schedule!, prior_setup.decode(θ); seed = "ppc$i"))
+	end
 end
 
+# ╔═╡ 329d7c85-d751-4711-b7da-5848c97cb152
+PlutoUI.ExperimentalLayout.vbox([plot_ppc_lines(c, ppc_draws, x[c]) for c in conditions])
 
-# ╔═╡ 27e1da44-1a7c-4946-bb1a-6b45fb4e2fc0
-let s = zeros(9); s[ring.idx] .= -1.0
-	[(a, kk) => let r = raw_observation(run(schedule!,
-			merge(prior_setup.decode(s),
-			      Dict(Symbol("$(e.target).$(e.kind).$(e.from).at") => a for e in prior_setup.edges),
-			      Dict(Symbol("$(e.target).$(e.kind).$(e.from).k") => -kk for e in prior_setup.edges));
-			seed = "g$(a)_$(kk)"))
-		(; relamp = round(median(relamp(r.closed)); digits = 2),
-		   ratio  = round(mean(r.open) / mean(r.closed); digits = 2))
-	   end
-	 for a in (350.0, 500.0, 700.0), kk in (2.0, 2.3, 2.6)]
+# ╔═╡ 13ede3c6-01b0-46d3-a629-8ea199f2dc78
+edge_groups = let n = length(genes)
+	slot(t, f) = Symbol("$(genes[t]).edge.$(genes[f]).sgrna_cas9")
+	idx(ps) = [findfirst(==(slot(t, f)), simulations.names) for (t, f) in ps]
+	(; ring    = idx([(i, mod1(i - 1, n)) for i in 1:n]),
+	   reverse = idx([(i, mod1(i + 1, n)) for i in 1:n]),
+	   self    = idx([(i, i) for i in 1:n]))
 end
 
+# ╔═╡ 7aac6942-66bd-4213-b961-da788388ebce
+function plot_marginals(S; nbins = 40, s_off = 0.1, truth=nothing)
+	d = size(S, 1)
+	edges = range(-1, 1; length = nbins + 1)
+	role = fill(:self, d); role[edge_groups.ring] .= :ring; role[edge_groups.reverse] .= :reverse
+	col = (ring = (:steelblue, 0.75), reverse = (:indianred, 0.6), self = (:grey, 0.5))
+	fig = Figure(size = (680, 600))
+	for k in 1:d
+		ax = Axis(fig[fld1(k, 3), mod1(k, 3)];
+			  title = edge_label(prior_setup.names[k]),
+			  xlabel = fld1(k, 3) == 3 ? "s" : "",
+			  ylabel = mod1(k, 3) == 1 ? "density" : "")
+
+
+		hist!(ax, S[k, :]; bins = edges, normalization = :pdf, color = (col[role[k]], 0.75))
+		hlines!(ax, [0.5]; color = :black, linestyle = :dash)
+		vlines!(ax, [-s_off, s_off]; color = :grey, linestyle = :dot)
+		truth === nothing || vlines!(ax, [truth[k]]; color = :crimson, linewidth = 2.5)
+		xlims!(ax, -1.02, 1.02)
+	end
+	fig
+end
+
+# ╔═╡ fc8143b8-2576-4c3d-b444-2c7c8d9b73f7
+plot_marginals(S)
+
+# ╔═╡ a6de88cc-f0f4-42a3-a566-3adfa022eb25
+let 
+	R = S[edge_groups.ring, :]
+	lbl = edge_label.(prior_setup.names[edge_groups.ring])
+	fig = Figure(size = (680, 240))
+	for (k, (i, j)) in enumerate(((1,2), (1,3), (2,3)))
+		ax = Axis(fig[1, k]; xlabel = lbl[i], ylabel = lbl[j])
+		datashader!(ax, Point2f.(R[i, :], R[j, :]))
+	end
+	fig
+end
+
+# ╔═╡ 7c603ad7-6257-461c-811e-a4e5d4b39479
+let R = S[edge_groups.ring, :], n = 24,
+	lbl = edge_label.(prior_setup.names[edge_groups.ring])
+	bin(v) = clamp(floor(Int, (v + 1) / 2 * n) + 1, 1, n)
+	H = zeros(Float32, n, n, n)
+	for k in axes(R, 2)
+		H[bin(R[1,k]), bin(R[2,k]), bin(R[3,k])] += 1
+	end
+	G = [sum(@view H[max(i-1,1):min(i+1,n), max(j-1,1):min(j+1,n), max(k-1,1):min(k+1,n)])
+		 for i in 1:n, j in 1:n, k in 1:n]
+	G ./= maximum(G)
+
+	fig = Figure(size = (760, 700))
+	ax = Axis3(fig[1,1]; xlabel = lbl[1], ylabel = lbl[2], zlabel = lbl[3],
+			   aspect = :data, perspectiveness = 0.5, clip = false)
+	contour!(ax, (-1, 1), (-1, 1), (-1, 1), G; levels = [0.08, 0.25, 0.6],
+			 alpha = 0.18, colormap = :viridis, colorrange = (0, 1))
+	Makie.deactivate_interaction!(ax, :scrollzoom)
+	limits!(ax, -1, 1, -1, 1, -1, 1)
+	fig
+end;
+
+# ╔═╡ 105f4987-9a2e-4bd2-a56c-c817cf158acd
+function topology_stats(S)
+	q = (1 - prior_setup.s_off) / 2
+	repressive = S .< -prior_setup.s_off
+	activating = S .>  prior_setup.s_off
+	present    = abs.(S) .>= prior_setup.s_off
+	other      = setdiff(axes(S, 1), edge_groups.ring)
+
+	in_ring    = vec(all(repressive[edge_groups.ring, :]; dims = 1))
+	in_reverse = vec(all(activating[edge_groups.reverse, :]; dims = 1))
+
+	(; p_ring    = mean(in_ring),    bayes_factor_ring    = bayes_factor(mean(in_ring), q^3),
+	   p_reverse = mean(in_reverse), bayes_factor_reverse = bayes_factor(mean(in_reverse), q^3))
+end
+
+# ╔═╡ 6d7c11e6-de39-4bbf-8b7f-ce1b11f060b8
+topology_stats(S)
 
 # ╔═╡ 58be258c-993d-4517-97d9-1d59873a1a2c
 estimator_wt = with_live_logs() do
 	train_posterior(simulations.θ, 
 					mapslices(normalise, 
 							  simulations.Z[1:length(traces[:closed].t), :, :]; 
-							  dims = (1, 2)), split; seed = "applewt")
+							  dims = (1, 2)), split; seed = "applewt50k")
 end
 
 # ╔═╡ c3812b35-bb5e-4351-8de2-ff2da7894706
-S_wt = posterior(estimator_wt, x_wt, simulations.θ)
+S_wt = posterior(estimator_wt, x_wt, simulations.θ);
 
 # ╔═╡ 2ef3d076-1e35-4f55-9ae2-de0f94d2de64
 plot_marginals(S_wt)
 
 # ╔═╡ 46dddcc3-1a86-4878-9f7b-73dd649c459e
 sample_posterior(S_wt)
+
+# ╔═╡ 8d0c7db7-ca65-4214-bed0-1c2a60cb7b21
+ppc_draws_wt = let n = 30
+	map(1:n) do i
+		θ = S_wt[:, rand(1:size(S_wt, 2))]
+		observation(run(schedule!, prior_setup.decode(θ); seed = "ppc$i"))
+	end
+end
+
+# ╔═╡ f2fa4d4c-af3e-4a78-9900-53b395cf6021
+PlutoUI.ExperimentalLayout.vbox([plot_ppc_lines(c, ppc_draws_wt, x[c]) for c in conditions])
+
+# ╔═╡ 899a6e33-604e-4408-99fb-7dc1f43de192
+topology_stats(S_wt)
 
 # ╔═╡ bf2b786f-a7bc-4b4b-b66d-3317fe8909e6
 let
@@ -987,15 +1101,28 @@ let
     sbc_plot(sbc_wt, simulations)
 end
 
+# ╔═╡ 1651a512-a28a-40a2-82bc-c6bce628b6c3
+Z_wt = mapslices(normalise,
+                 simulations.Z[1:length(traces[:closed].t), :, :];
+                 dims = (1, 2));
+
+# ╔═╡ 0255c100-e787-4096-af1c-608ecb0443f3
+shrinkage(estimator_wt, simulations.θ, Z_wt, split)
+
 # ╔═╡ 7363839a-0978-4f88-87af-7230f5ea8988
 S_synthetic = let
-	s = zeros(9); s[ring.idx] .= -1.0
+	s = zeros(length(prior_setup.names)); s[edge_groups.ring] .= -0.8
 	o = observation(run(schedule!, prior_setup.decode(s); seed = "ring1"))
 	posterior(estimator, flatten(o), simulations.θ[:, split.train])
 end
 
 # ╔═╡ 162434de-e304-449f-a22f-0e794c83c57b
-plot_marginals(S_synthetic; truth=[0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.0])
+plot_marginals(S_synthetic; truth = let t = zeros(length(prior_setup.names))
+	t[edge_groups.ring] .= -0.8; t
+end)
+
+# ╔═╡ 8299b0f0-cb08-4803-aa9e-20d154ced117
+topology_stats(S_synthetic)
 
 # ╔═╡ Cell order:
 # ╟─f030a2b8-7aa1-49d0-a438-d46d06870998
@@ -1038,14 +1165,12 @@ plot_marginals(S_synthetic; truth=[0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.
 # ╠═4aa90a45-6339-42aa-9d59-90394f8fd4e3
 # ╟─cf3a114a-c147-40cf-9709-0ab901e74cae
 # ╠═f1b39cf9-8f3e-4e62-a64b-7f7d8dddb661
-# ╠═17866681-934a-4815-8d02-444bb98dcf52
-# ╠═0e65a84a-1d5f-4318-8eac-5f578319d1f6
-# ╠═27e1da44-1a7c-4946-bb1a-6b45fb4e2fc0
 # ╟─c2ba1b94-34d8-4e16-a799-4a4177bea7ab
 # ╟─3375089b-595a-4258-b50c-c6812b604587
 # ╟─d9349b15-5d62-478e-92de-d672cbf86f18
 # ╟─ede66989-a2c4-43c2-8640-5944075d43e6
-# ╠═b20ad086-2b04-4cc2-8d08-4dbc3fad222b
+# ╟─b20ad086-2b04-4cc2-8d08-4dbc3fad222b
+# ╟─d8198379-3f20-48ae-8ccd-a03ab4bcd714
 # ╠═620088a8-1700-4938-9bc7-a647a3beabf9
 # ╟─8c1554a1-1638-47f1-adfb-23c383923d95
 # ╟─c508c880-7466-4eaa-9dbe-c0c1aee95da2
@@ -1055,7 +1180,6 @@ plot_marginals(S_synthetic; truth=[0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.
 # ╟─452a3724-e706-4881-8f7a-4c0083e80c76
 # ╠═58274dc3-1edb-47af-b2fb-09585df8b474
 # ╠═3872327a-c1ce-4923-8dbd-758d31f73e5e
-# ╟─c175d899-3280-4067-99d5-b6e5b9311a7d
 # ╠═6e977053-1104-48eb-ac30-ae59237782c0
 # ╠═66af873c-7d69-45e0-9f62-bb4b5669804c
 # ╟─f2a19c0f-c339-44bf-9773-98df6ccce7c1
@@ -1074,26 +1198,48 @@ plot_marginals(S_synthetic; truth=[0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.
 # ╠═2d431f5f-88c4-4c91-9860-9948d7242c8c
 # ╟─aef9cd8f-5a72-445f-9cfd-14ab2959df8f
 # ╠═0b517b7d-06a2-41d4-9eb0-29189ef21fdf
+# ╟─237184cb-50cd-40ed-ad78-9c8bbc969804
+# ╟─c0cb2a78-a875-4416-b7b6-3dd70eaaab45
+# ╠═a3147353-d84e-4925-9be1-93ad53708754
 # ╟─d7610be6-5d7c-427a-95b1-82d903ac4282
 # ╠═461d24fe-3903-4889-89df-1d451b94d1db
 # ╠═49fd6fa6-c11d-447a-ae70-d5ba45e45811
-# ╟─7aac6942-66bd-4213-b961-da788388ebce
-# ╠═fc8143b8-2576-4c3d-b444-2c7c8d9b73f7
-# ╠═5edca0b9-0924-4da5-a159-12911761a06b
+# ╟─9621d07a-7fb9-4e32-863e-b57a9e9b8a11
+# ╟─5edca0b9-0924-4da5-a159-12911761a06b
 # ╠═a5d0d3f2-209d-427d-93cd-c8d312ceeb72
-# ╟─8954c65f-0cbe-4734-bf54-66113ccf8b39
+# ╟─c9cc99b1-b43b-4f2d-bd89-ffd4e39bf30d
+# ╟─4abd251a-1de6-4750-be13-6067cc7e2e92
+# ╠═329d7c85-d751-4711-b7da-5848c97cb152
 # ╟─409aa215-cc29-4469-bf6e-f6a59e8fb844
-# ╠═a64ae383-6d1f-4147-a6e3-0e7dff47d33b
+# ╠═13ede3c6-01b0-46d3-a629-8ea199f2dc78
+# ╟─08c0dbaf-a345-44a1-adc6-16e7f08fbb26
+# ╟─7aac6942-66bd-4213-b961-da788388ebce
+# ╟─33a08a96-7161-430e-b89a-29fb6fa6087e
+# ╠═fc8143b8-2576-4c3d-b444-2c7c8d9b73f7
+# ╟─a6de88cc-f0f4-42a3-a566-3adfa022eb25
+# ╟─7c603ad7-6257-461c-811e-a4e5d4b39479
+# ╟─03c97a0a-e488-4026-b4a5-c6fc6aa55bb4
+# ╟─a56d437c-7605-4e7e-b78c-19e17f8102f8
+# ╠═734acf9f-030f-49bd-8c47-55580e4421e9
+# ╟─105f4987-9a2e-4bd2-a56c-c817cf158acd
+# ╠═6d7c11e6-de39-4bbf-8b7f-ce1b11f060b8
 # ╟─91fff83d-ff9d-4dbf-a3e8-04d14771ef1b
 # ╠═58be258c-993d-4517-97d9-1d59873a1a2c
 # ╠═96560e70-0ddc-4e1c-ad6c-f63602e99993
 # ╠═c3812b35-bb5e-4351-8de2-ff2da7894706
 # ╟─bf2b786f-a7bc-4b4b-b66d-3317fe8909e6
+# ╠═1651a512-a28a-40a2-82bc-c6bce628b6c3
+# ╠═0255c100-e787-4096-af1c-608ecb0443f3
 # ╠═2ef3d076-1e35-4f55-9ae2-de0f94d2de64
 # ╠═46dddcc3-1a86-4878-9f7b-73dd649c459e
+# ╟─8d0c7db7-ca65-4214-bed0-1c2a60cb7b21
+# ╟─f2fa4d4c-af3e-4a78-9900-53b395cf6021
+# ╠═899a6e33-604e-4408-99fb-7dc1f43de192
 # ╟─fd2da864-6c6b-4674-95f4-f56b4424d2d7
 # ╠═7363839a-0978-4f88-87af-7230f5ea8988
 # ╠═162434de-e304-449f-a22f-0e794c83c57b
+# ╠═8299b0f0-cb08-4803-aa9e-20d154ced117
+# ╟─1653db04-b38a-4f1a-857b-3b79f2e08584
 # ╟─a1b50041-e44c-4acb-96fb-e433ab21a560
 # ╟─1d06f01f-9fa2-4a7f-bb22-fe846cd7bff3
 # ╠═93e6f519-3599-46b8-af04-d4a6eb0dd767
