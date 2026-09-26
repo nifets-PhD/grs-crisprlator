@@ -1272,7 +1272,7 @@ version = "1.1.0"
 
 [[deps.GeneRegulatorySystems]]
 deps = ["Catalyst", "Colors", "DataStructures", "Distributions", "JSON", "JumpProcesses", "Kronecker", "Logging", "ModelingToolkit", "PrecompileTools", "Random", "Roots", "SHA", "SparseArrays", "StatsBase"]
-git-tree-sha1 = "fe52b36f85d7822e0173f6d438c12e8c90705ff5"
+git-tree-sha1 = "e2f8e1cffa718d13a9501b67c2ff753546bc2d07"
 repo-rev = "dev"
 repo-url = "https://github.com/nifets/GeneRegulatorySystems.jl"
 uuid = "321a2579-640d-4198-9790-c715c19becf3"
